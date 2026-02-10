@@ -6,7 +6,11 @@ on:
     tags: [ 'v*' ]
   pull_request:
   workflow_dispatch:
-
+concurrency:
+  # Group by workflow name and branch name (e.g., "MLC-LLM-main")
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # If true, cancels the currently running job for this branch
+  cancel-in-progress: true
 permissions:
   contents: write
   packages: write
