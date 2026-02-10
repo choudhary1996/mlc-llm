@@ -7,10 +7,6 @@ on:
   release:
     types: [ created ]
 
-concurrency:
-  group: mlc-llm-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}/mlc-llm
   PYTHON_VERSION: "3.12"
@@ -20,7 +16,7 @@ permissions:
   packages: write
 
 # =========================================================
-# 1️⃣ Build Multipurpose Docker Image
+# 1️⃣ Build Multipurpose Image
 # =========================================================
 jobs:
 
@@ -30,28 +26,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Verify Docker
-      - name: Check Docker
-        run: docker --version
-
-      # Login GHCR
-      - name: Login to GHCR
+      - name: Login GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      # Build image
-      - name: Build Docker image
+      - name: Build image
         run: |
           docker build \
             -f .devops/Dockerfile \
             -t $IMAGE_NAME:latest \
+            -t $IMAGE_NAME:${{ github.sha }} \
             .
 
-      # Push image
-      - name: Push Docker image
-        run: docker push $IMAGE_NAME:latest
+      - name: Push image
+        run: |
+          docker push $IMAGE_NAME:latest
+          docker push $IMAGE_NAME:${{ github.sha }}
 
 # =========================================================
-# 2️⃣ Build + Validate + Tests (Gate)
+# 2️⃣ Build + Validate + Tests
 # =========================================================
 
   test:
@@ -59,14 +51,16 @@ jobs:
     needs: docker-image
 
     steps:
-      - name: Pull image
-        run: docker pull $IMAGE_NAME:latest
+      - uses: actions/checkout@v4
 
-      - name: Run build + validation + tests
+      - name: Pull image
+        run: docker pull $IMAGE_NAME:${{ github.sha }}
+
+      - name: Run build + validation
         run: |
           docker run --rm \
             -v $PWD:/workspace \
-            $IMAGE_NAME:latest \
+            $IMAGE_NAME:${{ github.sha }} \
             bash -c "
               build-mlc &&
               validate-mlc &&
@@ -74,7 +68,7 @@ jobs:
             "
 
 # =========================================================
-# 3️⃣ Linux Wheel Build (Containerized)
+# 3️⃣ Linux Wheel Build
 # =========================================================
 
   build-linux:
@@ -84,21 +78,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build wheel inside container
+      - name: Pull image
+        run: docker pull $IMAGE_NAME:${{ github.sha }}
+
+      - name: Build runtime + wheel
         run: |
           docker run --rm \
             -v $PWD:/workspace \
-            $IMAGE_NAME:latest \
+            $IMAGE_NAME:${{ github.sha }} \
             bash -c "
               source /opt/conda/etc/profile.d/conda.sh &&
               conda activate mlc-chat-venv &&
+
+              build-mlc &&
+
               cd /workspace/python &&
               pip install build wheel setuptools &&
               python -m build --wheel
             "
 
-      - name: Upload Linux wheel
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: linux-wheel
           path: python/dist/*.whl
@@ -118,20 +117,28 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      # Build runtime first
+      - name: Build runtime
+        run: |
+          mkdir build
+          cd build
+          echo n|python ../cmake/gen_cmake_config.py
+          cmake ..
+          cmake --build . --config Release
+
       - name: Build wheel
         run: |
           pip install build wheel setuptools
           cd python
           python -m build --wheel
 
-      - name: Upload Windows wheel
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: windows-wheel
           path: python/dist/*.whl
 
 # =========================================================
-# 5️⃣ Publish Release Artifacts
+# 5️⃣ Release Wheels
 # =========================================================
 
   release:
@@ -144,7 +151,7 @@ jobs:
         with:
           path: dist
 
-      - name: Upload wheels to release
+      - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
           files: dist/**/*.whl
