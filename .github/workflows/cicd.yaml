@@ -1,69 +1,143 @@
-name: Production CI/CD - MLC LLM
+name: Full Production CI/CD - MLC LLM
 
 on:
   push:
     branches: [ main ]
   pull_request:
+  release:
+    types: [ created ]
+
+concurrency:
+  group: mlc-llm-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: "3.13"
+  IMAGE_NAME: ghcr.io/${{ github.repository }}/mlc-llm
+  PYTHON_VERSION: "3.12"
 
+permissions:
+  contents: write
+  packages: write
+
+# =========================================================
+# 1️⃣ Build Multipurpose Docker Image
+# =========================================================
 jobs:
 
-  test-linux:
+  docker-build:
     runs-on: ubuntu-22.04
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
-      - uses: conda-incubator/setup-miniconda@v3
+      # ---------------- Login GHCR ----------------
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | \
+             docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      # ---------------- Build image ----------------
+      - name: Build Docker image
+        run: |
+          docker build \
+            -f .devops/Dockerfile \
+            -t $IMAGE_NAME:latest \
+            .
+
+      # ---------------- Push image ----------------
+      - name: Push image
+        run: docker push $IMAGE_NAME:latest
+
+# =========================================================
+# 2️⃣ Validate Build (Containerized)
+# =========================================================
+
+  validate:
+    runs-on: ubuntu-22.04
+    needs: docker-build
+
+    steps:
+      - name: Pull image
+        run: docker pull $IMAGE_NAME:latest
+
+      - name: Run validation
+        run: |
+          docker run --rm \
+            $IMAGE_NAME:latest \
+            bash -c "
+              build-mlc &&
+              validate-mlc
+            "
+
+# =========================================================
+# 3️⃣ Linux Wheel Build (Inside Container)
+# =========================================================
+
+  build-linux-wheel:
+    runs-on: ubuntu-22.04
+    needs: validate
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheel inside container
+        run: |
+          docker run --rm \
+            -v $PWD:/workspace \
+            $IMAGE_NAME:latest \
+            bash -c "
+              source /opt/conda/etc/profile.d/conda.sh &&
+              conda activate mlc-chat-venv &&
+              cd /workspace/python &&
+              pip install build wheel setuptools &&
+              python -m build --wheel
+            "
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-wheel
+          path: python/dist/*.whl
+
+# =========================================================
+# 4️⃣ Windows Wheel Build (Native)
+# =========================================================
+
+  build-windows-wheel:
+    runs-on: windows-2022
+    needs: validate
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          activate-environment: mlc-chat-venv
-          channels: conda-forge
 
-      # ---------------- DEPS ----------------
-      - name: Install build deps
-        shell: bash -l {0}
+      - name: Build wheel
         run: |
-          conda install -y cmake>=3.24 rust git
-          pip install wheel setuptools build pytest
-
-      # ---------------- BUILD ----------------
-      - name: Build Runtime
-        shell: bash -l {0}
-        run: |
-          mkdir build && cd build
-
-          printf "\n\nn\nn\nn\nn\nn\nn\n" | \
-          python ../cmake/gen_cmake_config.py
-
-          cmake ..
-          make -j$(nproc)
-
-          # Place libs where TVM expects
-          mkdir -p ../3rdparty/tvm/build
-          cp libtvm*.so ../3rdparty/tvm/build/ || true
-          cp libtvm_runtime*.so ../3rdparty/tvm/build/ || true
-
-      # ---------------- TVM ----------------
-      - name: Install TVM Python
-        shell: bash -l {0}
-        run: |
-          cd 3rdparty/tvm/python
-          pip install -e .
-
-      # ---------------- MLC (NO DEPS) ----------------
-      - name: Install MLC-LLM (no external TVM)
-        shell: bash -l {0}
-        run: |
+          pip install build wheel setuptools
           cd python
-          pip install -e . --no-deps
+          python -m build --wheel
 
-          # Install safe deps only
-          pip install \
-            datasets fastapi openai pandas \
-            prompt_toolkit requests safetensors \
-            sent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-wheel
+          path: python/dist/*.whl
+
+# =========================================================
+# 5️⃣ Publish GitHub Release Assets
+# =========================================================
+
+  release:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    needs: [build-linux-wheel, build-windows-wheel]
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Upload wheels to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*.whl
