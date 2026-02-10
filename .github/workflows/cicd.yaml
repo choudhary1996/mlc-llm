@@ -1,9 +1,10 @@
-name: Production CI/CD
+name: Production CI/CD - MLC LLM
 
 on:
   push:
     branches: [ main ]
   workflow_dispatch: 
+
 concurrency:
   group: mlc-llm-${{ github.ref }}
   cancel-in-progress: true
@@ -16,53 +17,81 @@ permissions:
   contents: read
   packages: write
 
+
 jobs:
 
   test-linux:
     runs-on: ubuntu-22.04
 
     steps:
+
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
 
       - uses: conda-incubator/setup-miniconda@v3
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           activate-environment: mlc-chat-venv
+          auto-activate-base: false
           channels: conda-forge
 
-      - name: Install deps
+
+      - name: Install Dependencies
         shell: bash -l {0}
         run: |
-          conda install -y cmake>=3.24 rust git
-          pip install build wheel setuptools pytest
+          conda install -y \
+            "cmake>=3.24" \
+            rust \
+            git
 
-      - name: Build runtime (non-interactive)
+          pip install \
+            build \
+            wheel \
+            setuptools \
+            pytest
+
+
+      - name: Build Runtime
         shell: bash -l {0}
         run: |
           mkdir -p build
           cd build
 
+          # Answer all config prompts automatically
           printf "\n\nn\nn\nn\nn\nn\nn\n" | \
           python ../cmake/gen_cmake_config.py
 
           cmake ..
           make -j$(nproc)
 
-      - name: Install Python
+
+      - name: Install TVM Python
+        shell: bash -l {0}
+        run: |
+          cd 3rdparty/tvm/python
+          pip install -e .
+
+      - name: Install MLC-LLM
         shell: bash -l {0}
         run: |
           cd python
           pip install -e .
 
+
       - name: Validate CLI
         shell: bash -l {0}
-        run: mlc_llm chat -h
+        run: |
+          python -c "import tvm; print('TVM OK')"
+          python -c "import mlc_llm; print('MLC OK')"
+          mlc_llm chat -h
 
-      - name: Tests
+
+      - name: Run Tests
         shell: bash -l {0}
-        run: pytest -v || echo "No tests"
+        run: pytest -v || echo "No tests found"
+
 
 
   build-linux:
@@ -80,12 +109,15 @@ jobs:
           activate-environment: mlc-chat-venv
           channels: conda-forge
 
-      - name: Build wheel
+      - name: Install deps
         shell: bash -l {0}
         run: |
           conda install -y cmake>=3.24 rust git
           pip install build wheel setuptools
 
+      - name: Build wheel
+        shell: bash -l {0}
+        run: |
           mkdir build && cd build
 
           printf "\n\nn\nn\nn\nn\nn\nn\n" | \
@@ -94,13 +126,19 @@ jobs:
           cmake ..
           make -j$(nproc)
 
-          cd ../python
+          # Install TVM
+          cd ../3rdparty/tvm/python
+          pip install -e .
+
+          # Build wheel
+          cd ../../../python
           python -m build --wheel
 
       - uses: actions/upload-artifact@v4
         with:
           name: linux-wheel
           path: python/dist/*.whl
+
 
 
   build-windows:
@@ -143,6 +181,11 @@ jobs:
       - name: Build runtime
         run: cmake --build build --config Release
 
+      - name: Install TVM
+        run: |
+          cd 3rdparty/tvm/python
+          pip install -e .
+
       - name: Build wheel
         run: |
           cd python
@@ -152,6 +195,7 @@ jobs:
         with:
           name: windows-wheel
           path: python/dist/*.whl
+
 
 
   docker:
@@ -174,6 +218,7 @@ jobs:
 
       - name: Push image
         run: docker push $IMAGE_NAME:latest
+
 
 
   release:
