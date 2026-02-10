@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV CONDA_DIR=/opt/conda
 ENV PATH=$CONDA_DIR/bin:$PATH
 
-# Base system deps
+
 RUN apt-get update && apt-get install -y \
     build-essential \
     git \
@@ -16,12 +16,13 @@ RUN apt-get update && apt-get install -y \
     software-properties-common \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Miniconda
-RUN wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh \
+
+RUN wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh \
+    -O /tmp/miniconda.sh \
  && bash /tmp/miniconda.sh -b -p $CONDA_DIR \
  && rm /tmp/miniconda.sh
 
-# Create build env
+
 RUN conda create -y -n mlc-chat-venv -c conda-forge \
     "cmake>=3.24" \
     rust \
@@ -39,4 +40,5 @@ RUN pip install --upgrade \
     pytest
 
 WORKDIR /workspace
+
 CMD ["/bin/bash"]
