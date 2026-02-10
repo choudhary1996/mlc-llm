@@ -1,12 +1,8 @@
-# =========================================================
-# Multipurpose Dev + Build Image — Production Stable
-# =========================================================
-
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CONDA_DIR=/opt/conda
-ENV PATH=$CONDA_DIR/bin:$PATH
+ENV PATH=/usr/local/bin:$CONDA_DIR/bin:$PATH
 
 # ---------------------------------------------------------
 # System dependencies
@@ -16,7 +12,6 @@ RUN apt-get update && apt-get install -y \
     git \
     wget \
     curl \
-    ca-certificates \
     pkg-config \
     libssl-dev \
     libtinfo-dev \
@@ -25,7 +20,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------
-# Install Miniforge (CI safe)
+# Install Miniforge (CI-safe)
 # ---------------------------------------------------------
 RUN wget -q https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh \
     -O /tmp/miniforge.sh \
@@ -35,10 +30,30 @@ RUN wget -q https://github.com/conda-forge/miniforge/releases/latest/download/Mi
 
 SHELL ["bash", "-c"]
 
-# ---------------------------------------------------------
-# Faster solver
-# ---------------------------------------------------------
 RUN conda install -n base -y conda-libmamba-solver && \
     conda config --set solver libmamba
 
-# ------------------------------
+# ---------------------------------------------------------
+# Conda env
+# ---------------------------------------------------------
+RUN conda create -y -n mlc-chat-venv -c conda-forge \
+    python=3.12 \
+    "cmake>=3.24" \
+    rust \
+    git \
+    pip \
+    && conda clean -afy
+
+WORKDIR /workspace
+COPY . /workspace
+
+# ---------------------------------------------------------
+# Copy scripts
+# ---------------------------------------------------------
+COPY .devops/build-mlc.sh /usr/local/bin/build-mlc
+COPY .devops/validate-mlc.sh /usr/local/bin/validate-mlc
+
+RUN chmod +x /usr/local/bin/build-mlc \
+ && chmod +x /usr/local/bin/validate-mlc
+
+CMD ["bash"]
