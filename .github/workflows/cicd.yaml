@@ -4,12 +4,23 @@ on:
   push:
     branches: [ main ]
     tags: [ 'v*' ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE'
+      - 'examples/**'
+
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE'
+
   workflow_dispatch:
 concurrency:
-  # Group by workflow name and branch name (e.g., "MLC-LLM-main")
   group: ${{ github.workflow }}-${{ github.ref }}
-  # If true, cancels the currently running job for this branch
   cancel-in-progress: true
 permissions:
   contents: write
@@ -17,7 +28,6 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  # Image name must be lowercase
   IMAGE_NAME: ${{ github.repository_owner }}/mlc-env
 
 jobs:
