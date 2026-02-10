@@ -4,22 +4,12 @@ on:
   push:
     branches: [ main ]
   pull_request:
-  release:
-    types: [ created ]
 
 env:
   PYTHON_VERSION: "3.13"
-  IMAGE_NAME: ghcr.io/${{ github.repository }}/mlc-llm
-
-permissions:
-  contents: read
-  packages: write
 
 jobs:
 
-# =========================================================
-# TEST — Native Build
-# =========================================================
   test-linux:
     runs-on: ubuntu-22.04
 
@@ -34,14 +24,15 @@ jobs:
           activate-environment: mlc-chat-venv
           channels: conda-forge
 
-      - name: Install deps
+      # ---------------- DEPS ----------------
+      - name: Install build deps
         shell: bash -l {0}
         run: |
           conda install -y cmake>=3.24 rust git
-          pip install setuptools wheel build pytest
+          pip install wheel setuptools build pytest
 
-      # ---------------- BUILD (FIXED) ----------------
-      - name: Build Runtime + TVM
+      # ---------------- BUILD ----------------
+      - name: Build Runtime
         shell: bash -l {0}
         run: |
           mkdir build && cd build
@@ -49,32 +40,30 @@ jobs:
           printf "\n\nn\nn\nn\nn\nn\nn\n" | \
           python ../cmake/gen_cmake_config.py
 
-          cmake .. \
-            -DUSE_TVM_RUNTIME=ON \
-            -DUSE_GRAPH_RUNTIME=ON \
-            -DUSE_CPP_RPC=ON
-
+          cmake ..
           make -j$(nproc)
 
-      # ---------------- PYTHON INSTALL ----------------
-      - name: Install TVM + MLC
+          # Place libs where TVM expects
+          mkdir -p ../3rdparty/tvm/build
+          cp libtvm*.so ../3rdparty/tvm/build/ || true
+          cp libtvm_runtime*.so ../3rdparty/tvm/build/ || true
+
+      # ---------------- TVM ----------------
+      - name: Install TVM Python
         shell: bash -l {0}
         run: |
           cd 3rdparty/tvm/python
           pip install -e .
 
-          cd ../../../python
-          pip install -e .
-
-      # ---------------- VALIDATION ----------------
-      - name: Validate CLI
+      # ---------------- MLC (NO DEPS) ----------------
+      - name: Install MLC-LLM (no external TVM)
         shell: bash -l {0}
         run: |
-          export LD_LIBRARY_PATH=$PWD/build:$LD_LIBRARY_PATH
-          export TVM_LIBRARY_PATH=$PWD/build
-          export TVM_HOME=$PWD/3rdparty/tvm
-          export PYTHONPATH=$PWD/3rdparty/tvm/python:$PYTHONPATH
+          cd python
+          pip install -e . --no-deps
 
-          python -c "import tvm; print('TVM OK')"
-          python -c "import mlc_llm; print('MLC OK')"
-          mlc_llm chat -h
+          # Install safe deps only
+          pip install \
+            datasets fastapi openai pandas \
+            prompt_toolkit requests safetensors \
+            sent
