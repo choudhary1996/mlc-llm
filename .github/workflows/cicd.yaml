@@ -1,4 +1,4 @@
-name: Production CI/CD - MLC LLM
+name: Production CI/CD
 
 on:
   push:
@@ -19,9 +19,6 @@ permissions:
 
 jobs:
 
-# =========================================================
-# 1️⃣ TEST — Native runner build (gates everything)
-# =========================================================
   test-linux:
     name: Test • Linux Native
     runs-on: ubuntu-22.04
@@ -32,7 +29,7 @@ jobs:
         with:
           submodules: recursive
 
-      # ---------------- Conda ----------------
+
       - name: Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
         with:
@@ -55,28 +52,24 @@ jobs:
             setuptools \
             pytest
 
-      # ---------------- Build Runtime ----------------
       - name: Build Runtime
         shell: bash -l {0}
         run: |
           mkdir -p build
           cd build
 
-          # Non-interactive config (FIXED)
-          python ../cmake/gen_cmake_config.py \
-            --tvm-source-dir ../3rdparty/tvm
+          # FIX: non-interactive config
+          printf "\n" | python ../cmake/gen_cmake_config.py
 
           cmake ..
           make -j$(nproc)
 
-      # ---------------- Install Python ----------------
       - name: Install Python Package
         shell: bash -l {0}
         run: |
           cd python
           pip install -e .
 
-      # ---------------- Validation ----------------
       - name: Validate CLI
         shell: bash -l {0}
         run: mlc_llm chat -h
@@ -89,9 +82,7 @@ jobs:
         shell: bash -l {0}
         run: pytest -v || echo "No tests found"
 
-# =========================================================
-# 2️⃣ Linux Wheel
-# =========================================================
+
   build-linux:
     runs-on: ubuntu-22.04
     needs: test-linux
@@ -118,8 +109,8 @@ jobs:
         run: |
           mkdir build && cd build
 
-          python ../cmake/gen_cmake_config.py \
-            --tvm-source-dir ../3rdparty/tvm
+          # FIX applied
+          printf "\n" | python ../cmake/gen_cmake_config.py
 
           cmake ..
           make -j$(nproc)
@@ -132,9 +123,7 @@ jobs:
           name: linux-wheel
           path: python/dist/*.whl
 
-# =========================================================
-# 3️⃣ Windows Wheel
-# =========================================================
+
   build-windows:
     runs-on: windows-2022
     needs: test-linux
@@ -159,8 +148,8 @@ jobs:
           mkdir build
           cd build
 
-          python ../cmake/gen_cmake_config.py ^
-            --tvm-source-dir ../3rdparty/tvm
+          REM FIX: non-interactive input
+          echo. | python ../cmake/gen_cmake_config.py
 
           cmake ..
 
@@ -177,9 +166,7 @@ jobs:
           name: windows-wheel
           path: python/dist/*.whl
 
-# =========================================================
-# 4️⃣ Docker (Multipurpose image)
-# =========================================================
+
   docker:
     name: Docker • Build & Push
     runs-on: ubuntu-22.04
@@ -202,9 +189,7 @@ jobs:
       - name: Push image
         run: docker push $IMAGE_NAME:latest
 
-# =========================================================
-# 5️⃣ Release assets
-# =========================================================
+
   release:
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
