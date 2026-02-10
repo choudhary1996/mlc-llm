@@ -4,7 +4,6 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch: 
-
 concurrency:
   group: mlc-llm-${{ github.ref }}
   cancel-in-progress: true
@@ -20,51 +19,38 @@ permissions:
 jobs:
 
   test-linux:
-    name: Test • Linux Native
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout repo + submodules
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-
-      - name: Setup Miniconda
-        uses: conda-incubator/setup-miniconda@v3
+      - uses: conda-incubator/setup-miniconda@v3
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           activate-environment: mlc-chat-venv
-          auto-activate-base: false
           channels: conda-forge
 
-      - name: Install Dependencies
+      - name: Install deps
         shell: bash -l {0}
         run: |
-          conda install -y \
-            "cmake>=3.24" \
-            rust \
-            git
+          conda install -y cmake>=3.24 rust git
+          pip install build wheel setuptools pytest
 
-          pip install \
-            build \
-            wheel \
-            setuptools \
-            pytest
-
-      - name: Build Runtime
+      - name: Build runtime (non-interactive)
         shell: bash -l {0}
         run: |
           mkdir -p build
           cd build
 
-          # FIX: non-interactive config
-          printf "\n" | python ../cmake/gen_cmake_config.py
+          printf "\n\nn\nn\nn\nn\nn\nn\n" | \
+          python ../cmake/gen_cmake_config.py
 
           cmake ..
           make -j$(nproc)
 
-      - name: Install Python Package
+      - name: Install Python
         shell: bash -l {0}
         run: |
           cd python
@@ -74,13 +60,9 @@ jobs:
         shell: bash -l {0}
         run: mlc_llm chat -h
 
-      - name: Validate Import
+      - name: Tests
         shell: bash -l {0}
-        run: python -c "import mlc_llm; print(mlc_llm)"
-
-      - name: Run Tests
-        shell: bash -l {0}
-        run: pytest -v || echo "No tests found"
+        run: pytest -v || echo "No tests"
 
 
   build-linux:
@@ -98,19 +80,16 @@ jobs:
           activate-environment: mlc-chat-venv
           channels: conda-forge
 
-      - name: Install deps
+      - name: Build wheel
         shell: bash -l {0}
         run: |
           conda install -y cmake>=3.24 rust git
           pip install build wheel setuptools
 
-      - name: Build wheel
-        shell: bash -l {0}
-        run: |
           mkdir build && cd build
 
-          # FIX applied
-          printf "\n" | python ../cmake/gen_cmake_config.py
+          printf "\n\nn\nn\nn\nn\nn\nn\n" | \
+          python ../cmake/gen_cmake_config.py
 
           cmake ..
           make -j$(nproc)
@@ -143,13 +122,21 @@ jobs:
           choco install rust -y
           pip install build wheel setuptools pytest
 
-      - name: Configure
+      - name: Configure build
         run: |
           mkdir build
           cd build
 
-          REM FIX: non-interactive input
-          echo. | python ../cmake/gen_cmake_config.py
+          (
+          echo.
+          echo.
+          echo n
+          echo n
+          echo n
+          echo n
+          echo n
+          echo n
+          ) | python ../cmake/gen_cmake_config.py
 
           cmake ..
 
@@ -168,7 +155,6 @@ jobs:
 
 
   docker:
-    name: Docker • Build & Push
     runs-on: ubuntu-22.04
     needs: [build-linux, build-windows]
 
@@ -200,7 +186,7 @@ jobs:
         with:
           path: dist
 
-      - name: Upload wheels
+      - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
           files: dist/**/*.whl
