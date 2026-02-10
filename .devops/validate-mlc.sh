@@ -5,6 +5,7 @@ source /opt/conda/etc/profile.d/conda.sh
 conda activate mlc-chat-venv
 
 export LD_LIBRARY_PATH=/workspace/build:/workspace/3rdparty/tvm/build:$LD_LIBRARY_PATH
+export PYTHONPATH=/workspace/3rdparty/tvm/python:$PYTHONPATH
 
 echo "=== Validate Python ==="
 python -c "import tvm; print('TVM OK')"
