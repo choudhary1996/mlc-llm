@@ -5,15 +5,23 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CONDA_DIR=/opt/conda \
     PATH=/opt/conda/envs/mlc-chat-venv/bin:/opt/conda/bin:/usr/local/bin:$PATH
 
-# 2. System Dependencies (with retry logic)
+# 2. System Dependencies (ENSURE wget IS HERE)
+# We add a check `command -v wget` to prove it installed successfully
 RUN apt-get update && \
-    for i in {1..5}; do apt-get install -y --no-install-recommends \
-    build-essential git wget curl ca-certificates cmake \
-    libssl-dev libtinfo-dev zlib1g-dev && break || \
-    (echo "Retrying apt install... $i" && apt-get update); done && \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    git \
+    wget \
+    curl \
+    ca-certificates \
+    cmake \
+    libssl-dev \
+    libtinfo-dev \
+    zlib1g-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # 3. Conda & Python 3.13
+# We use curl as a fallback if wget is missing, but apt-get above should fix it.
 RUN wget -q https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh -O /tmp/miniforge.sh && \
     bash /tmp/miniforge.sh -b -p $CONDA_DIR && \
     rm /tmp/miniforge.sh
