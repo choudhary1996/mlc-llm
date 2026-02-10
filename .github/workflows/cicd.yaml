@@ -17,21 +17,22 @@ permissions:
   contents: read
   packages: write
 
-
-
 jobs:
 
+# =========================================================
+# 1️⃣ TEST — Native runner build (gates everything)
+# =========================================================
   test-linux:
     name: Test • Linux Native
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout
+      - name: Checkout repo + submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-
+      # ---------------- Conda ----------------
       - name: Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
         with:
@@ -54,23 +55,28 @@ jobs:
             setuptools \
             pytest
 
+      # ---------------- Build Runtime ----------------
       - name: Build Runtime
         shell: bash -l {0}
         run: |
           mkdir -p build
           cd build
-          python ../cmake/gen_cmake_config.py
+
+          # Non-interactive config (FIXED)
+          python ../cmake/gen_cmake_config.py \
+            --tvm-source-dir ../3rdparty/tvm
+
           cmake ..
           make -j$(nproc)
 
-
+      # ---------------- Install Python ----------------
       - name: Install Python Package
         shell: bash -l {0}
         run: |
           cd python
           pip install -e .
 
-
+      # ---------------- Validation ----------------
       - name: Validate CLI
         shell: bash -l {0}
         run: mlc_llm chat -h
@@ -83,8 +89,9 @@ jobs:
         shell: bash -l {0}
         run: pytest -v || echo "No tests found"
 
-
-
+# =========================================================
+# 2️⃣ Linux Wheel
+# =========================================================
   build-linux:
     runs-on: ubuntu-22.04
     needs: test-linux
@@ -100,17 +107,20 @@ jobs:
           activate-environment: mlc-chat-venv
           channels: conda-forge
 
-      - name: Install Deps
+      - name: Install deps
         shell: bash -l {0}
         run: |
           conda install -y cmake>=3.24 rust git
           pip install build wheel setuptools
 
-      - name: Build Wheel
+      - name: Build wheel
         shell: bash -l {0}
         run: |
           mkdir build && cd build
-          python ../cmake/gen_cmake_config.py
+
+          python ../cmake/gen_cmake_config.py \
+            --tvm-source-dir ../3rdparty/tvm
+
           cmake ..
           make -j$(nproc)
 
@@ -122,8 +132,9 @@ jobs:
           name: linux-wheel
           path: python/dist/*.whl
 
-
-
+# =========================================================
+# 3️⃣ Windows Wheel
+# =========================================================
   build-windows:
     runs-on: windows-2022
     needs: test-linux
@@ -137,23 +148,26 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install Build Dependencies
+      - name: Install deps
         run: |
           choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
           choco install rust -y
           pip install build wheel setuptools pytest
 
-      - name: Configure Build
+      - name: Configure
         run: |
           mkdir build
           cd build
-          python ../cmake/gen_cmake_config.py
+
+          python ../cmake/gen_cmake_config.py ^
+            --tvm-source-dir ../3rdparty/tvm
+
           cmake ..
 
-      - name: Compile
+      - name: Build runtime
         run: cmake --build build --config Release
 
-      - name: Build Wheel
+      - name: Build wheel
         run: |
           cd python
           python -m build --wheel
@@ -163,32 +177,34 @@ jobs:
           name: windows-wheel
           path: python/dist/*.whl
 
-
-
+# =========================================================
+# 4️⃣ Docker (Multipurpose image)
+# =========================================================
   docker:
-    name: Build & Push Docker Image
+    name: Docker • Build & Push
     runs-on: ubuntu-22.04
     needs: [build-linux, build-windows]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Login to GHCR
+      - name: Login GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | \
              docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Build Image
+      - name: Build image
         run: |
           docker build \
             -f .devops/Dockerfile \
             -t $IMAGE_NAME:latest \
             .
 
-      - name: Push Image
+      - name: Push image
         run: docker push $IMAGE_NAME:latest
 
-
-
+# =========================================================
+# 5️⃣ Release assets
+# =========================================================
   release:
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
@@ -199,7 +215,7 @@ jobs:
         with:
           path: dist
 
-      - name: Upload Wheels to Release
+      - name: Upload wheels
         uses: softprops/action-gh-release@v2
         with:
           files: dist/**/*.whl
