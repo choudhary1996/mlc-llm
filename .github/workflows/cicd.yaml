@@ -1,27 +1,24 @@
-name: Production CI/CD - MLC LLM
+name: MLC-LLM Production CI/CD
 
 on:
   push:
     branches: [ main ]
   pull_request:
-  release:
-    types: [ created ]
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}/mlc-llm
-  PYTHON_VERSION: "3.12"
 
-permissions:
-  contents: write
-  packages: write
-
-# =========================================================
-# 1️⃣ Build Docker Image
-# =========================================================
 jobs:
 
-  docker-image:
-    runs-on: ubuntu-22.04
+# =========================================================
+# 1️⃣ Build + Push Multipurpose Image
+# =========================================================
+  docker:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - uses: actions/checkout@v4
@@ -29,11 +26,16 @@ jobs:
           submodules: recursive
 
       - name: Login GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build image
         run: |
           docker build \
+            --no-cache \
             -f .devops/Dockerfile \
             -t $IMAGE_NAME:latest \
             -t $IMAGE_NAME:${{ github.sha }} \
@@ -45,27 +47,24 @@ jobs:
           docker push $IMAGE_NAME:${{ github.sha }}
 
 # =========================================================
-# 2️⃣ Build + Validate + Tests
+# 2️⃣ Tests (Gate)
 # =========================================================
-
   test:
-    runs-on: ubuntu-22.04
-    needs: docker-image
+    needs: docker
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Pull image
-        run: docker pull $IMAGE_NAME:${{ github.sha }}
-
-      - name: Run build + validation
+      - name: Run build + validate + tests
         run: |
           docker run --rm \
             -v $PWD:/workspace \
             $IMAGE_NAME:${{ github.sha }} \
             bash -c "
+              which build-mlc &&
               build-mlc &&
               validate-mlc &&
               pytest -v
@@ -74,28 +73,24 @@ jobs:
 # =========================================================
 # 3️⃣ Linux Wheel Build
 # =========================================================
-
   build-linux:
-    runs-on: ubuntu-22.04
     needs: test
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Pull image
-        run: docker pull $IMAGE_NAME:${{ github.sha }}
-
-      - name: Build runtime + wheel
+      - name: Build wheel
         run: |
           docker run --rm \
             -v $PWD:/workspace \
             $IMAGE_NAME:${{ github.sha }} \
             bash -c "
+              build-mlc &&
               source /opt/conda/etc/profile.d/conda.sh &&
               conda activate mlc-chat-venv &&
-              build-mlc &&
               cd /workspace/python &&
               pip install build wheel setuptools &&
               python -m build --wheel
@@ -109,10 +104,9 @@ jobs:
 # =========================================================
 # 4️⃣ Windows Wheel Build
 # =========================================================
-
   build-windows:
-    runs-on: windows-2022
     needs: test
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -121,9 +115,12 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: 3.12
 
-      - name: Generate config (non-interactive)
+      - name: Init submodules
+        run: git submodule update --init --recursive
+
+      - name: Generate config
         run: |
           mkdir build
           cd build
@@ -137,8 +134,8 @@ jobs:
 
       - name: Build wheel
         run: |
-          pip install build wheel setuptools
           cd python
+          pip install build wheel setuptools
           python -m build --wheel
 
       - uses: actions/upload-artifact@v4
@@ -147,20 +144,19 @@ jobs:
           path: python/dist/*.whl
 
 # =========================================================
-# 5️⃣ Release Wheels
+# 5️⃣ Release
 # =========================================================
-
   release:
-    if: github.event_name == 'release'
-    runs-on: ubuntu-latest
     needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
 
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
 
-      - name: Upload release assets
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
+          tag_name: v1.0.${{ github.run_number }}
           files: dist/**/*.whl
