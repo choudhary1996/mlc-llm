@@ -16,7 +16,7 @@ permissions:
   packages: write
 
 # =========================================================
-# 1️⃣ Build Multipurpose Image
+# 1️⃣ Build Docker Image
 # =========================================================
 jobs:
 
@@ -25,6 +25,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Login GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
@@ -52,6 +54,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Pull image
         run: docker pull $IMAGE_NAME:${{ github.sha }}
@@ -64,7 +68,7 @@ jobs:
             bash -c "
               build-mlc &&
               validate-mlc &&
-              pytest -v || echo 'No tests found'
+              pytest -v
             "
 
 # =========================================================
@@ -77,6 +81,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Pull image
         run: docker pull $IMAGE_NAME:${{ github.sha }}
@@ -89,9 +95,7 @@ jobs:
             bash -c "
               source /opt/conda/etc/profile.d/conda.sh &&
               conda activate mlc-chat-venv &&
-
               build-mlc &&
-
               cd /workspace/python &&
               pip install build wheel setuptools &&
               python -m build --wheel
@@ -112,17 +116,22 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # Build runtime first
-      - name: Build runtime
+      - name: Generate config (non-interactive)
         run: |
           mkdir build
           cd build
           echo n|python ../cmake/gen_cmake_config.py
+
+      - name: Build runtime
+        run: |
+          cd build
           cmake ..
           cmake --build . --config Release
 
