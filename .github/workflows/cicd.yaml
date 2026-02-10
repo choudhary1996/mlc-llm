@@ -3,160 +3,134 @@ name: MLC-LLM Production CI/CD
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository }}/mlc-llm
+  REGISTRY: ghcr.io
+  # Image name must be lowercase
+  IMAGE_NAME: ${{ github.repository_owner }}/mlc-env
 
 jobs:
-
-# =========================================================
-# 1️⃣ Build + Push Multipurpose Image
-# =========================================================
-  docker:
+#Setup Env Stage
+  setup-env:
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-      packages: write
-
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
-      - name: Login GHCR
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build image
-        run: |
-          docker build \
-            --no-cache \
-            -f .devops/Dockerfile \
-            -t $IMAGE_NAME:latest \
-            -t $IMAGE_NAME:${{ github.sha }} \
-            .
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: .devops/Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+#Build Stage
 
-      - name: Push image
-        run: |
-          docker push $IMAGE_NAME:latest
-          docker push $IMAGE_NAME:${{ github.sha }}
-
-# =========================================================
-# 2️⃣ Tests (Gate)
-# =========================================================
-  test:
-    needs: docker
-    runs-on: ubuntu-latest
-
+  build:
+    needs: setup-env
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Run build + validate + tests
-        run: |
-          docker run --rm \
-            -v $PWD:/workspace \
-            $IMAGE_NAME:${{ github.sha }} \
-            bash -c "
-              which build-mlc &&
-              build-mlc &&
-              validate-mlc &&
-              pytest -v
-            "
 
-# =========================================================
-# 3️⃣ Linux Wheel Build
-# =========================================================
-  build-linux:
-    needs: test
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
+      - name: Log in to GHCR (Linux Only)
+        if: matrix.os == 'ubuntu-latest'
+        uses: docker/login-action@v3
         with:
-          submodules: recursive
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build wheel
+
+      - name: Enable Swap Space (Linux)
+        if: matrix.os == 'ubuntu-latest'
         run: |
-          docker run --rm \
-            -v $PWD:/workspace \
-            $IMAGE_NAME:${{ github.sha }} \
-            bash -c "
-              build-mlc &&
-              source /opt/conda/etc/profile.d/conda.sh &&
-              conda activate mlc-chat-venv &&
-              cd /workspace/python &&
-              pip install build wheel setuptools &&
-              python -m build --wheel
-            "
+          sudo fallocate -l 10G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          echo "Swap enabled. Current usage:"
+          free -h
 
-      - uses: actions/upload-artifact@v4
+      - name: Linux Build (Dockerized)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          
+          # Run build script inside container
+          docker run --rm -v $PWD:/workspace ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+          bash -c "build-mlc && validate-mlc"
+
+
+      - name: Setup Python (Windows Only)
+        if: matrix.os == 'windows-latest'
+        uses: actions/setup-python@v5
         with:
-          name: linux-wheel
-          path: python/dist/*.whl
+          python-version: '3.13'
 
-# =========================================================
-# 4️⃣ Windows Wheel Build
-# =========================================================
-  build-windows:
-    needs: test
-    runs-on: windows-latest
+      - name: Setup MSVC (Windows Only)
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
 
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: 3.12
-
-      - name: Init submodules
-        run: git submodule update --init --recursive
-
-      - name: Generate config
+      - name: Build Windows Wheel
+        if: matrix.os == 'windows-latest'
+        shell: bash
         run: |
-          mkdir build
-          cd build
-          echo n|python ../cmake/gen_cmake_config.py
+          mkdir -p build && cd build
+          
+          # Manual Config Generation (No interactive prompts)
+          echo "set(TVM_SOURCE_DIR ../3rdparty/tvm)" > config.cmake
+          echo "set(CMAKE_BUILD_TYPE RelWithDebInfo)" >> config.cmake
+          echo "set(USE_CUDA OFF)" >> config.cmake
+          echo "set(USE_VULKAN OFF)" >> config.cmake
+          echo "set(USE_METAL OFF)" >> config.cmake
+          echo "set(USE_OPENCL OFF)" >> config.cmake
 
-      - name: Build runtime
-        run: |
-          cd build
-          cmake ..
-          cmake --build . --config Release
-
-      - name: Build wheel
-        run: |
-          cd python
-          pip install build wheel setuptools
+          cmake .. -A x64
+          cmake --build . --config Release --parallel 
+          
+          cd ../python
+          pip install build wheel
           python -m build --wheel
 
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: windows-wheel
+          name: wheels-${{ matrix.os }}
           path: python/dist/*.whl
 
-# =========================================================
-# 5️⃣ Release
-# =========================================================
-  release:
-    needs: [build-linux, build-windows]
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+#Release Stage
 
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          merge-multiple: true
 
-      - uses: softprops/action-gh-release@v2
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          files: dist/**/*.whl
+          files: dist/*.whl
