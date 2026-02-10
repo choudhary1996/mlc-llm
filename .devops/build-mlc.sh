@@ -5,6 +5,9 @@ echo "=== Activate conda ==="
 source /opt/conda/etc/profile.d/conda.sh
 conda activate mlc-chat-venv
 
+echo "=== Fix git safe directory ==="
+git config --global --add safe.directory /workspace
+
 echo "=== Init submodules ==="
 cd /workspace
 git submodule update --init --recursive
@@ -26,4 +29,4 @@ cd build
 cmake ..
 cmake --build . --parallel 2
 
-echo "=== Done ==="
+echo "=== Build complete ==="
