@@ -28,14 +28,26 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+      # -------------------------------------------------
+      # Checkout
+      # -------------------------------------------------
       - uses: actions/checkout@v4
 
-      # ---------------- Login GHCR ----------------
-      - name: Login to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | \
-             docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      # -------------------------------------------------
+      # Verify Docker exists
+      # -------------------------------------------------
+      - name: Check Docker
+        run: docker --version
 
-      # ---------------- Build image ----------------
+      # -------------------------------------------------
+      # Login to GHCR
+      # -------------------------------------------------
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      # -------------------------------------------------
+      # Build image
+      # -------------------------------------------------
       - name: Build Docker image
         run: |
           docker build \
@@ -43,12 +55,14 @@ jobs:
             -t $IMAGE_NAME:latest \
             .
 
-      # ---------------- Push image ----------------
-      - name: Push image
+      # -------------------------------------------------
+      # Push image
+      # -------------------------------------------------
+      - name: Push Docker image
         run: docker push $IMAGE_NAME:latest
 
 # =========================================================
-# 2️⃣ Validate Build (Containerized)
+# 2️⃣ Validate Build Inside Container
 # =========================================================
 
   validate:
@@ -56,10 +70,12 @@ jobs:
     needs: docker-build
 
     steps:
+      # Pull built image
       - name: Pull image
         run: docker pull $IMAGE_NAME:latest
 
-      - name: Run validation
+      # Run build + validation
+      - name: Validate build
         run: |
           docker run --rm \
             $IMAGE_NAME:latest \
@@ -69,7 +85,7 @@ jobs:
             "
 
 # =========================================================
-# 3️⃣ Linux Wheel Build (Inside Container)
+# 3️⃣ Linux Wheel Build (Containerized)
 # =========================================================
 
   build-linux-wheel:
@@ -92,13 +108,14 @@ jobs:
               python -m build --wheel
             "
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload Linux wheel
+        uses: actions/upload-artifact@v4
         with:
           name: linux-wheel
           path: python/dist/*.whl
 
 # =========================================================
-# 4️⃣ Windows Wheel Build (Native)
+# 4️⃣ Windows Wheel Build
 # =========================================================
 
   build-windows-wheel:
@@ -118,13 +135,14 @@ jobs:
           cd python
           python -m build --wheel
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload Windows wheel
+        uses: actions/upload-artifact@v4
         with:
           name: windows-wheel
           path: python/dist/*.whl
 
 # =========================================================
-# 5️⃣ Publish GitHub Release Assets
+# 5️⃣ Publish Release Assets
 # =========================================================
 
   release:
@@ -137,7 +155,7 @@ jobs:
         with:
           path: dist
 
-      - name: Upload wheels to release
+      - name: Upload wheels to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/**/*.whl
