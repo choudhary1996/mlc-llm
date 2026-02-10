@@ -3,7 +3,9 @@ name: Production CI/CD - MLC LLM
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: 
+  pull_request:
+  release:
+    types: [ created ]
 
 concurrency:
   group: mlc-llm-${{ github.ref }}
@@ -17,19 +19,21 @@ permissions:
   contents: read
   packages: write
 
-
 jobs:
 
+# =========================================================
+# 1️⃣ TEST — Native Linux Build (Pipeline Gate)
+# =========================================================
   test-linux:
     runs-on: ubuntu-22.04
 
     steps:
-
+      # ---------------- Checkout ----------------
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-
+      # ---------------- Conda ----------------
       - uses: conda-incubator/setup-miniconda@v3
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -37,7 +41,7 @@ jobs:
           auto-activate-base: false
           channels: conda-forge
 
-
+      # ---------------- Dependencies ----------------
       - name: Install Dependencies
         shell: bash -l {0}
         run: |
@@ -52,48 +56,52 @@ jobs:
             setuptools \
             pytest
 
-
+      # ---------------- Runtime Build ----------------
       - name: Build Runtime
         shell: bash -l {0}
         run: |
           mkdir -p build
           cd build
 
-          # Answer all config prompts automatically
+          # Non-interactive config (ALL prompts handled)
           printf "\n\nn\nn\nn\nn\nn\nn\n" | \
           python ../cmake/gen_cmake_config.py
 
           cmake ..
           make -j$(nproc)
 
-
-      - name: Install TVM Python
+      # ---------------- Install TVM ----------------
+      - name: Install TVM Python Bindings
         shell: bash -l {0}
         run: |
           cd 3rdparty/tvm/python
           pip install -e .
 
+      # ---------------- Install MLC ----------------
       - name: Install MLC-LLM
         shell: bash -l {0}
         run: |
           cd python
           pip install -e .
 
-
+      # ---------------- Validation ----------------
       - name: Validate CLI
         shell: bash -l {0}
         run: |
+          export LD_LIBRARY_PATH=$PWD/build:$LD_LIBRARY_PATH
+
           python -c "import tvm; print('TVM OK')"
           python -c "import mlc_llm; print('MLC OK')"
           mlc_llm chat -h
 
-
+      # ---------------- Tests ----------------
       - name: Run Tests
         shell: bash -l {0}
         run: pytest -v || echo "No tests found"
 
-
-
+# =========================================================
+# 2️⃣ Linux Wheel Build
+# =========================================================
   build-linux:
     runs-on: ubuntu-22.04
     needs: test-linux
@@ -126,11 +134,11 @@ jobs:
           cmake ..
           make -j$(nproc)
 
-          # Install TVM
+          export LD_LIBRARY_PATH=$PWD:$LD_LIBRARY_PATH
+
           cd ../3rdparty/tvm/python
           pip install -e .
 
-          # Build wheel
           cd ../../../python
           python -m build --wheel
 
@@ -139,8 +147,9 @@ jobs:
           name: linux-wheel
           path: python/dist/*.whl
 
-
-
+# =========================================================
+# 3️⃣ Windows Wheel Build
+# =========================================================
   build-windows:
     runs-on: windows-2022
     needs: test-linux
@@ -196,8 +205,9 @@ jobs:
           name: windows-wheel
           path: python/dist/*.whl
 
-
-
+# =========================================================
+# 4️⃣ Docker Image (Multipurpose)
+# =========================================================
   docker:
     runs-on: ubuntu-22.04
     needs: [build-linux, build-windows]
@@ -219,8 +229,9 @@ jobs:
       - name: Push image
         run: docker push $IMAGE_NAME:latest
 
-
-
+# =========================================================
+# 5️⃣ Release Wheels
+# =========================================================
   release:
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
