@@ -63,7 +63,7 @@ jobs:
           mkdir -p build
           cd build
 
-          # Non-interactive config (ALL prompts handled)
+          # Non-interactive config (answers all prompts)
           printf "\n\nn\nn\nn\nn\nn\nn\n" | \
           python ../cmake/gen_cmake_config.py
 
@@ -84,11 +84,13 @@ jobs:
           cd python
           pip install -e .
 
-      # ---------------- Validation ----------------
+      # ---------------- Validation (FIXED PROPERLY) ----------------
       - name: Validate CLI
         shell: bash -l {0}
         run: |
           export LD_LIBRARY_PATH=$PWD/build:$LD_LIBRARY_PATH
+          export TVM_LIBRARY_PATH=$PWD/build
+          export PYTHONPATH=$PWD/3rdparty/tvm/python:$PYTHONPATH
 
           python -c "import tvm; print('TVM OK')"
           python -c "import mlc_llm; print('MLC OK')"
@@ -135,6 +137,8 @@ jobs:
           make -j$(nproc)
 
           export LD_LIBRARY_PATH=$PWD:$LD_LIBRARY_PATH
+          export TVM_LIBRARY_PATH=$PWD
+          export PYTHONPATH=$PWD/../3rdparty/tvm/python:$PYTHONPATH
 
           cd ../3rdparty/tvm/python
           pip install -e .
@@ -206,7 +210,7 @@ jobs:
           path: python/dist/*.whl
 
 # =========================================================
-# 4️⃣ Docker Image (Multipurpose)
+# 4️⃣ Docker Image
 # =========================================================
   docker:
     runs-on: ubuntu-22.04
