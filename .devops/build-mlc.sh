@@ -12,21 +12,45 @@ echo "=== Init submodules ==="
 cd /workspace
 git submodule update --init --recursive
 
+# -------------------------------------------------
+# Generate config
+# -------------------------------------------------
 echo "=== Generate config ==="
 mkdir -p build
 cd build
 
 printf "\nn\nn\nn\nn\nn\nn\n" | python ../cmake/gen_cmake_config.py
 
+# -------------------------------------------------
+# Build MLC
+# -------------------------------------------------
 echo "=== Build MLC ==="
 cmake ..
 cmake --build . --parallel 2
 
+# -------------------------------------------------
+# Build TVM runtime
+# -------------------------------------------------
 echo "=== Build TVM runtime ==="
 cd ../3rdparty/tvm
 mkdir -p build
 cd build
+
 cmake ..
 cmake --build . --parallel 2
+
+# -------------------------------------------------
+# Install TVM Python bindings  ⭐ FIX
+# -------------------------------------------------
+echo "=== Install TVM Python ==="
+cd ../python
+pip install -e .
+
+# -------------------------------------------------
+# Install MLC Python package
+# -------------------------------------------------
+echo "=== Install MLC Python ==="
+cd /workspace/python
+pip install -e . --no-deps
 
 echo "=== Build complete ==="
