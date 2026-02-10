@@ -1,3 +1,102 @@
+# MLC-LLM CI/CD & Build Specifications
+
+This repository utilizes a multi-stage **GitHub Actions** pipeline to automate the development lifecycle, ensuring reproducible builds across Linux and Windows.
+
+## 📊 Pipeline Data & Specifications
+
+| Feature | Specification |
+| --- | --- |
+| **Orchestrator** | GitHub Actions |
+| **Configuration** | `.github/workflows/cicd.yaml` |
+| **Container Registry** | GitHub Container Registry (GHCR) |
+| **Artifacts** | Python Wheels (`.whl`) |
+| **Release Strategy** | Tag-based (`v*`) |
+
+### 🔄 Workflow Triggers
+
+| Event | Branch/Tag | Action |
+| --- | --- | --- |
+| **Push** | `main` | Full Build & Test (Linux + Windows) |
+| **Pull Request** | Any | Build Check (No Release) |
+| **Tag** | `v*` | **Publish Release** to GitHub Releases |
+| **Manual Trigger**|
+
+---
+
+## Build Matrix & Environment
+
+The pipeline uses a matrix strategy to handle cross-platform compilation in parallel.
+
+### 🐧 Linux (Containerized)
+
+* **Runner:** `ubuntu-latest`
+* **Environment:** Custom Docker Image (`ghcr.io/owner/mlc-env:latest`)
+* **Compiler:** GCC/G++ (via Docker)
+* **Python:** 3.13
+* **Build Script:** `.devops/scripts/build-mlc.sh`
+
+### 🪟 Windows (Native)
+
+* **Runner:** `windows-latest`
+* **Environment:** Native Host
+* **Compiler:** MSVC (Microsoft Visual C++)
+* **Python:** 3.13
+* **Key Config:** `cmake -A x64` with manual `config.cmake` generation.
+
+---
+
+##  Job Architecture
+
+1. **`setup-env`**
+* **Input:** `.devops/Dockerfile`
+* **Output:** Docker Image pushed to GHCR.
+* **Cache:** Uses Docker Layer Caching to speed up subsequent runs.
+
+
+2. **`build` (Matrix)**
+* **Linux:** Pulls image → Mounts Source → Runs `build-mlc` → Validates (`.so` checks) → Uploads Wheel.
+* **Windows:** Setups MSVC → Compiles DLLs → Packages Wheel → Uploads Wheel.
+
+
+3. **`release`**
+* **Input:** Artifacts from `build` job.
+* **Output:** GitHub Release with downloadable `.whl` files.
+
+
+
+---
+
+## 📂 Key File Reference
+
+| File Path | Purpose |
+| --- | --- |
+| `.github/workflows/cicd.yaml` | **Master CI Configuration.** Defines jobs, secrets, and permissions. |
+| `.devops/Dockerfile` | **Build Environment.** Ubuntu 22.04 + Python 3.13 + Rust + CMake. |
+| `.devops/scripts/build-mlc.sh` | **Linux Builder.** Automates CMake config and compilation. |
+| `.devops/scripts/validate-mlc.sh` | **Test Script.** Verifies shared libraries and CLI functionality. |
+
+##  Quick Commands
+
+**Run Local Build (Linux/Docker):**
+
+```bash
+docker build -t mlc-dev -f .devops/Dockerfile .
+docker run --rm -v $(pwd):/workspace mlc-dev build-mlc
+
+```
+
+**Verify Artifacts:**
+
+```bash
+docker run --rm -v $(pwd):/workspace mlc-dev validate-mlc
+
+```
+
+
+
+
+
+
 <div align="center">
 
 # MLC LLM
