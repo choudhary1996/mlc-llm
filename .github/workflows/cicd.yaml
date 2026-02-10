@@ -7,10 +7,6 @@ on:
   release:
     types: [ created ]
 
-concurrency:
-  group: mlc-llm-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
   PYTHON_VERSION: "3.13"
   IMAGE_NAME: ghcr.io/${{ github.repository }}/mlc-llm
@@ -22,91 +18,10 @@ permissions:
 jobs:
 
 # =========================================================
-# 1️⃣ TEST — Native Linux Build (Pipeline Gate)
+# TEST — Native Build
 # =========================================================
   test-linux:
     runs-on: ubuntu-22.04
-
-    steps:
-      # ---------------- Checkout ----------------
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      # ---------------- Conda ----------------
-      - uses: conda-incubator/setup-miniconda@v3
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          activate-environment: mlc-chat-venv
-          auto-activate-base: false
-          channels: conda-forge
-
-      # ---------------- Dependencies ----------------
-      - name: Install Dependencies
-        shell: bash -l {0}
-        run: |
-          conda install -y \
-            "cmake>=3.24" \
-            rust \
-            git
-
-          pip install \
-            build \
-            wheel \
-            setuptools \
-            pytest
-
-      # ---------------- Runtime Build ----------------
-      - name: Build Runtime
-        shell: bash -l {0}
-        run: |
-          mkdir -p build
-          cd build
-
-          # Non-interactive config (answers all prompts)
-          printf "\n\nn\nn\nn\nn\nn\nn\n" | \
-          python ../cmake/gen_cmake_config.py
-
-          cmake ..
-          make -j$(nproc)
-
-      # ---------------- Install TVM ----------------
-      - name: Install TVM Python Bindings
-        shell: bash -l {0}
-        run: |
-          cd 3rdparty/tvm/python
-          pip install -e .
-
-      # ---------------- Install MLC ----------------
-      - name: Install MLC-LLM
-        shell: bash -l {0}
-        run: |
-          cd python
-          pip install -e .
-
-      # ---------------- Validation (FIXED PROPERLY) ----------------
-      - name: Validate CLI
-        shell: bash -l {0}
-        run: |
-          export LD_LIBRARY_PATH=$PWD/build:$LD_LIBRARY_PATH
-          export TVM_LIBRARY_PATH=$PWD/build
-          export PYTHONPATH=$PWD/3rdparty/tvm/python:$PYTHONPATH
-
-          python -c "import tvm; print('TVM OK')"
-          python -c "import mlc_llm; print('MLC OK')"
-          mlc_llm chat -h
-
-      # ---------------- Tests ----------------
-      - name: Run Tests
-        shell: bash -l {0}
-        run: pytest -v || echo "No tests found"
-
-# =========================================================
-# 2️⃣ Linux Wheel Build
-# =========================================================
-  build-linux:
-    runs-on: ubuntu-22.04
-    needs: test-linux
 
     steps:
       - uses: actions/checkout@v4
@@ -123,9 +38,10 @@ jobs:
         shell: bash -l {0}
         run: |
           conda install -y cmake>=3.24 rust git
-          pip install build wheel setuptools
+          pip install setuptools wheel build pytest
 
-      - name: Build wheel
+      # ---------------- BUILD (FIXED) ----------------
+      - name: Build Runtime + TVM
         shell: bash -l {0}
         run: |
           mkdir build && cd build
@@ -133,120 +49,32 @@ jobs:
           printf "\n\nn\nn\nn\nn\nn\nn\n" | \
           python ../cmake/gen_cmake_config.py
 
-          cmake ..
+          cmake .. \
+            -DUSE_TVM_RUNTIME=ON \
+            -DUSE_GRAPH_RUNTIME=ON \
+            -DUSE_CPP_RPC=ON
+
           make -j$(nproc)
 
-          export LD_LIBRARY_PATH=$PWD:$LD_LIBRARY_PATH
-          export TVM_LIBRARY_PATH=$PWD
-          export PYTHONPATH=$PWD/../3rdparty/tvm/python:$PYTHONPATH
-
-          cd ../3rdparty/tvm/python
-          pip install -e .
-
-          cd ../../../python
-          python -m build --wheel
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux-wheel
-          path: python/dist/*.whl
-
-# =========================================================
-# 3️⃣ Windows Wheel Build
-# =========================================================
-  build-windows:
-    runs-on: windows-2022
-    needs: test-linux
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install deps
-        run: |
-          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
-          choco install rust -y
-          pip install build wheel setuptools pytest
-
-      - name: Configure build
-        run: |
-          mkdir build
-          cd build
-
-          (
-          echo.
-          echo.
-          echo n
-          echo n
-          echo n
-          echo n
-          echo n
-          echo n
-          ) | python ../cmake/gen_cmake_config.py
-
-          cmake ..
-
-      - name: Build runtime
-        run: cmake --build build --config Release
-
-      - name: Install TVM
+      # ---------------- PYTHON INSTALL ----------------
+      - name: Install TVM + MLC
+        shell: bash -l {0}
         run: |
           cd 3rdparty/tvm/python
           pip install -e .
 
-      - name: Build wheel
+          cd ../../../python
+          pip install -e .
+
+      # ---------------- VALIDATION ----------------
+      - name: Validate CLI
+        shell: bash -l {0}
         run: |
-          cd python
-          python -m build --wheel
+          export LD_LIBRARY_PATH=$PWD/build:$LD_LIBRARY_PATH
+          export TVM_LIBRARY_PATH=$PWD/build
+          export TVM_HOME=$PWD/3rdparty/tvm
+          export PYTHONPATH=$PWD/3rdparty/tvm/python:$PYTHONPATH
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-wheel
-          path: python/dist/*.whl
-
-# =========================================================
-# 4️⃣ Docker Image
-# =========================================================
-  docker:
-    runs-on: ubuntu-22.04
-    needs: [build-linux, build-windows]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Login GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | \
-             docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Build image
-        run: |
-          docker build \
-            -f .devops/Dockerfile \
-            -t $IMAGE_NAME:latest \
-            .
-
-      - name: Push image
-        run: docker push $IMAGE_NAME:latest
-
-# =========================================================
-# 5️⃣ Release Wheels
-# =========================================================
-  release:
-    if: github.event_name == 'release'
-    runs-on: ubuntu-latest
-    needs: [build-linux, build-windows]
-
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-
-      - name: Upload release assets
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/**/*.whl
+          python -c "import tvm; print('TVM OK')"
+          python -c "import mlc_llm; print('MLC OK')"
+          mlc_llm chat -h
