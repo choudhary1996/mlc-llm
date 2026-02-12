@@ -1,0 +1,55 @@
+# MLC-LLM Docker Ignore
+# Git
+.git
+.gitignore
+.gitmodules
+
+# GitHub
+.github
+
+# Build artifacts
+build/
+dist/
+wheels/
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+*.so
+*.dylib
+*.dll
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation
+docs/
+site/
+
+# Platform-specific
+android/
+ios/
+
+# Large example files
+examples/
+
+# CI files
+ci/
+
+# Config that might have local changes
+config.cmake
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Temp files
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
