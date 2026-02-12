@@ -1,5 +1,6 @@
 [![MLC-LLM-CI](https://github.com/choudhary1996/mlc-llm/actions/workflows/cicd.yaml/badge.svg)](https://github.com/choudhary1996/mlc-llm/actions/workflows/cicd.yaml)
 [![Release](https://github.com/choudhary1996/mlc-llm/actions/workflows/release.yaml/badge.svg)](https://github.com/choudhary1996/mlc-llm/actions/workflows/release.yaml)
+[![Docker](https://github.com/choudhary1996/mlc-llm/actions/workflows/docker.yaml/badge.svg)](https://github.com/choudhary1996/mlc-llm/actions/workflows/docker.yaml)
 
 
 # MLC-LLM CI/CD & Build Specifications
