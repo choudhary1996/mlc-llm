@@ -2,6 +2,70 @@
 [![Release](https://github.com/choudhary1996/mlc-llm/actions/workflows/release.yaml/badge.svg)](https://github.com/choudhary1996/mlc-llm/actions/workflows/release.yaml)
 [![Docker](https://github.com/choudhary1996/mlc-llm/actions/workflows/docker.yaml/badge.svg)](https://github.com/choudhary1996/mlc-llm/actions/workflows/docker.yaml)
 
+# MLC-LLM CI/CD
+multipurpose Docker image, automated tests, CI/CD with GHCR and GitHub releases.
+
+---
+
+## 1. Multipurpose Docker Image
+
+| Requirement | Status | Notes |
+|-------------|--------|--------|
+| **Development environment** (interactive shell, source mounted, dev tools) | `docker run -it --rm -v $(pwd):/workspace IMAGE /bin/bash`; `WORKDIR /workspace`; dev-init.sh; pytest, black, isort, pylint, mypy, build, wheel, etc. |
+| **Build environment** (non-interactive entrypoint for compile + package) | Default `ENTRYPOINT` is `build-entrypoint.sh`: config → cmake/ninja → pip install -e . → validate. Optional `BUILD_WHEEL` for wheel output. |
+| **Built & pushed to GHCR automatically** | `docker.yaml` builds and pushes to `ghcr.io/${{ github.repository }}` on push to `main` (when Dockerfile/docker workflow change) and on `workflow_dispatch`. |
+
+**Build-from-source doc alignment (Dockerfile):**
+
+- CMake ≥ 3.24 ✅ (pip install "cmake>=3.24")
+- Git ✅ (apt)
+- Rust/Cargo ✅ (apt; Hugging Face tokenizer)
+- GPU runtime ✅ (Vulkan by default; CUDA via build-arg)
+- Step 2: configure & build ✅ (config.cmake + cmake + ninja)
+- Step 3: install via Python ✅ (`pip install -e .` in `python/`)
+- Step 4: validate ✅ (libs, `mlc_llm chat -h`, `import mlc_llm`)
+
+**Minor:** Doc conda example uses Python 3.13; Dockerfile defaults to 3.10.
+
+---
+
+## 2. Automated Tests
+
+| Requirement | Status | Notes |
+|-------------|--------|--------|
+| Tests run in CI | ✅ Met | `test-linux` and `test-windows` run pytest (unit tests, excluding integration/op). |
+| Tests **gate** further stages | ⚠️ **Gap** | Tests are run but do **not** fail the job when they fail. |
+
+**Gap details:**
+
+- **ci.yaml:** The “Run unit tests” step has `continue-on-error: true` (line 369), so a failing pytest still leaves `test-linux` as success. `ci-success` then sees “success” even when tests failed.
+- **release.yaml:** The pytest step uses `|| echo "::warning::Some tests failed"` (line 289), so the step succeeds even when tests fail. The release job still runs.
+
+So “tests must run and gate further stages” is only partially satisfied until test failures actually fail the job.
+
+---
+
+## 3. GitHub Actions CI/CD Pipeline
+
+| Requirement | Status | Notes |
+|-------------|--------|--------|
+| Test-driven deployment | ⚠️ Partial | Flow is test → release, but tests don’t fail the job (see above). |
+| Build MLC-LLM Python package | ✅ Met | Both `ci.yaml` and `release.yaml` build (cmake + ninja, then `pip install -e .`). |
+| Publish wheels as GitHub Release | ✅ Met | `release.yaml` on `v*` tags (and manual dispatch) creates a GitHub Release and attaches wheels. |
+| Linux x64 | ✅ Met | `ubuntu-22.04`, wheel artifact `wheel-linux-x64`, included in release. |
+| Windows x64 | ✅ Met | `windows-latest`, wheel artifact `wheel-windows-x64`, included in release. |
+
+---
+
+## Summary
+
+- **Dockerfile:** Fulfills “multipurpose” (dev + build) and aligns with the build-from-source doc. Image is built and pushed to GHCR by `docker.yaml`.
+- **Automated tests:** Run in CI and release workflows, but **do not gate** because of `continue-on-error` and `|| echo`; fixing that is required for true test gating.
+- **CI/CD:** Builds and GitHub releases for Linux x64 and Windows x64 are in place; making tests strictly gate (fail the job on failure) will satisfy “test-driven deployment” and “tests gate further stages.”
+
+Recommended change: remove `continue-on-error` from the test step in `ci.yaml` and remove the `|| echo "::warning::..."` in `release.yaml` so that test failures fail the job and block `ci-success` and release.
+
+
 
 # MLC-LLM CI/CD & Build Specifications
 
