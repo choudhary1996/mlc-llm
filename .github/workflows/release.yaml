@@ -1,0 +1,375 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.x.x)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: '3.10'
+
+jobs:
+
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+            IS_PRERELEASE="${{ github.event.inputs.prerelease }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+            [[ "$VERSION" =~ (dev|alpha|beta|rc) ]] && IS_PRERELEASE="true" || IS_PRERELEASE="false"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "is_prerelease=${IS_PRERELEASE}" >> $GITHUB_OUTPUT
+
+      - name: Validate format
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] || { echo "::error::Invalid version"; exit 1; }
+
+  build-linux:
+    name: Build Linux x64
+    runs-on: ubuntu-22.04
+    needs: validate
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Set up Conda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: mlc-chat-venv
+          python-version: ${{ env.PYTHON_VERSION }}
+          channels: conda-forge
+
+      - name: Install dependencies
+        shell: bash -el {0}
+        run: conda install -y -c conda-forge "cmake>=3.24" rust git ninja
+
+      - name: Install Vulkan SDK
+        run: |
+          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo apt-get update && sudo apt-get install -y vulkan-sdk
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: release-linux
+          max-size: 2G
+
+      - name: Build
+        shell: bash -el {0}
+        run: |
+          mkdir -p build && cd build
+          cat > config.cmake << 'EOF'
+          set(TVM_SOURCE_DIR 3rdparty/tvm)
+          set(CMAKE_BUILD_TYPE RelWithDebInfo)
+          set(USE_VULKAN ON)
+          EOF
+          export PATH="/usr/lib/ccache:$PATH"
+          cmake .. -G Ninja && ninja -j $(nproc)
+        timeout-minutes: 60
+
+      - name: Install
+        shell: bash -el {0}
+        run: cd python && pip install -e .
+
+      - name: Install TVM runtime
+        shell: bash -el {0}
+        run: pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
+
+      - name: Validate
+        shell: bash -el {0}
+        run: |
+          mlc_llm chat -h
+          python -c "import mlc_llm; print(mlc_llm)"
+
+      - name: Build wheel
+        shell: bash -el {0}
+        run: |
+          pip install build wheel
+          cd python && pip wheel --no-deps -w ../wheels .
+          ls -la ../wheels/
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-linux-x64
+          path: wheels/*.whl
+
+
+  build-windows:
+    name: Build Windows x64
+    runs-on: windows-latest
+    needs: validate
+    defaults:
+      run:
+        shell: cmd /C call {0}
+    steps:
+      - name: Git config
+        run: git config --system core.longpaths true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Set up Conda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: mlc-chat-venv
+          channel-priority: strict
+          environment-file: ci/build-environment.yaml
+
+      - name: Install deps
+        shell: bash -el {0}
+        run: conda install -y -c conda-forge ninja
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          $vulkanVersion = "1.3.290.0"
+          $installerUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanSDK-$vulkanVersion-Installer.exe"
+          $installerPath = "$env:TEMP\VulkanSDK-Installer.exe"
+          
+          Write-Host "Downloading Vulkan SDK $vulkanVersion..."
+          Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
+          
+          Write-Host "Installing Vulkan SDK..."
+          Start-Process -FilePath $installerPath -ArgumentList "--accept-licenses --default-answer --confirm-command install" -Wait -NoNewWindow
+          
+          # Set environment variable for this job
+          $vulkanPath = "C:\VulkanSDK\$vulkanVersion"
+          echo "VULKAN_SDK=$vulkanPath" >> $env:GITHUB_ENV
+          echo "$vulkanPath\Bin" >> $env:GITHUB_PATH
+
+      - name: Build
+        shell: cmd
+        run: |
+          mkdir build
+          cd build
+          echo set(TVM_SOURCE_DIR 3rdparty/tvm) > config.cmake
+          echo set(CMAKE_BUILD_TYPE RelWithDebInfo) >> config.cmake
+          echo set(USE_VULKAN ON) >> config.cmake
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DVULKAN_SDK=%VULKAN_SDK%
+          cmake --build . --config RelWithDebInfo --parallel
+        timeout-minutes: 120
+
+      - name: Copy built libraries
+        shell: pwsh
+        run: |
+          # VS generator puts outputs in config-named subdirectory
+          # Copy all DLLs and libs to build/ root for Python to find
+          Get-ChildItem -Path build/RelWithDebInfo -Filter "*.dll" | Copy-Item -Destination build/ -Force
+          Get-ChildItem -Path build/RelWithDebInfo -Filter "*.lib" | Copy-Item -Destination build/ -Force
+          if (Test-Path build/tvm/RelWithDebInfo) {
+            Get-ChildItem -Path build/tvm/RelWithDebInfo -Filter "*.dll" | Copy-Item -Destination build/ -Force
+          }
+          Write-Host "Built libraries in build/:"
+          Get-ChildItem -Path build -Filter "*.dll"
+
+      - name: Install TVM runtime
+        shell: bash -el {0}
+        run: pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
+
+      - name: Install
+        shell: bash -el {0}
+        run: |
+          pip install datasets fastapi ml_dtypes openai pandas prompt_toolkit requests safetensors sentencepiece shortuuid tiktoken tqdm transformers uvicorn
+          pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
+          cd python && pip install -e . --no-deps
+
+      - name: Validate
+        shell: bash -el {0}
+        run: |
+          mlc_llm chat -h
+          python -c "import mlc_llm; print(mlc_llm)"
+
+      - name: Build wheel
+        shell: bash -el {0}
+        run: |
+          pip install build wheel
+          cd python && pip wheel --no-deps -w ../wheels .
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-windows-x64
+          path: wheels/*.whl
+
+
+  test-linux:
+    name: Test Linux
+    runs-on: ubuntu-22.04
+    needs: build-linux
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Download wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: wheel-linux-x64
+          path: wheels
+
+      - name: Install and test
+        run: |
+          sudo apt-get update && sudo apt-get install -y libvulkan1
+          pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu || true
+          pip install wheels/*.whl --force-reinstall
+          pip install pytest transformers datasets
+          pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
+          
+          # Validation
+          mlc_llm chat -h
+          python -c "import mlc_llm; print(mlc_llm)"
+          
+          # Run tests (must pass to gate release)
+          python -m pytest -v tests/python/ -m unittest \
+            --ignore=tests/python/integration/ \
+            --ignore=tests/python/op/ \
+            --tb=short
+
+  test-windows:
+    name: Test Windows
+    runs-on: windows-latest
+    needs: build-windows
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Conda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-activate-base: false
+          environment-file: ci/build-environment.yaml
+          activate-environment: mlc-chat-venv
+
+      - name: Install zstd (required by TVM/tvm.dll on Windows)
+        shell: bash -el {0}
+        run: conda install -y -c conda-forge zstd
+
+      - name: Download wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: wheel-windows-x64
+          path: wheels
+
+      - name: Install and validate
+        shell: bash -el {0}
+        run: |
+          pip install --pre -U -f https://mlc.ai/wheels mlc-ai-nightly-cpu
+          pip install pytest datasets fastapi ml_dtypes openai pandas prompt_toolkit requests safetensors sentencepiece shortuuid tiktoken tqdm transformers uvicorn
+          pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install wheels/*.whl --force-reinstall --no-deps
+          python -m mlc_llm chat -h
+          python -c "import mlc_llm; print(mlc_llm)"
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [validate, build-linux, build-windows, test-linux, test-windows]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect wheels
+        run: |
+          mkdir -p release-wheels
+          find artifacts -name "*.whl" -exec cp {} release-wheels/ \;
+          ls -la release-wheels/
+
+      - name: Create release notes
+        run: |
+          cat << 'EOF' > notes.md
+          ## MLC-LLM ${{ needs.validate.outputs.version }}
+          
+          ### Installation
+          ```bash
+          pip install mlc_llm-*.whl
+          ```
+          
+          ### Platforms
+          | Platform | Arch | Backend |
+          |----------|------|---------|
+          | Linux | x64 | Vulkan |
+          | Windows | x64 | Vulkan |
+          
+          ### Validation
+          ```bash
+          mlc_llm chat -h
+          python -c "import mlc_llm; print(mlc_llm)"
+          ```
+          
+          ### Requirements
+          - Python >= 3.9
+          - Vulkan drivers
+          - [Full docs](https://llm.mlc.ai/docs/)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.validate.outputs.version }}
+          name: MLC-LLM ${{ needs.validate.outputs.version }}
+          body_path: notes.md
+          prerelease: ${{ needs.validate.outputs.is_prerelease == 'true' }}
+          files: release-wheels/*.whl
+          fail_on_unmatched_files: true
+
+      - name: Summary
+        run: |
+          echo "## Release ${{ needs.validate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "### Wheels" >> $GITHUB_STEP_SUMMARY
+          ls release-wheels/*.whl | xargs -I {} basename {} >> $GITHUB_STEP_SUMMARY
