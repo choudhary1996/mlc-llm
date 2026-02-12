@@ -1,3 +1,7 @@
+[![MLC-LLM-CI](https://github.com/choudhary1996/mlc-llm/actions/workflows/cicd.yaml/badge.svg)](https://github.com/choudhary1996/mlc-llm/actions/workflows/cicd.yaml)
+
+
+
 # MLC-LLM CI/CD & Build Specifications
 
 This repository utilizes a multi-stage **GitHub Actions** pipeline to automate the development lifecycle, ensuring reproducible builds across Linux and Windows.
